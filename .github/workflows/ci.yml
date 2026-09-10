@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+          cache: true
+
+      - name: linter 
+        uses: golangci/golangci-lint-action@v7
+        with:
+          version: latest
+      
+      - name: Run tests
+        run: go test -race ./...
+
+      - name: Build
+        run: go build -v ./...
