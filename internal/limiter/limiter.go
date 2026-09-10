@@ -2,26 +2,9 @@ package limiter
 
 import (
 	"context"
-	"errors"
 	"math"
 	"sync"
 	"time"
-)
-
-// Sentinel errors returned by the package.
-var (
-	// ErrInvalidLimit is returned when the bucket limit is zero, negative, NaN or infinite.
-	ErrInvalidLimit = errors.New("limit must be a positive finite number")
-
-	// ErrInvalidRate is returned when the refill rate is zero, negative, NaN or infinite.
-	ErrInvalidRate = errors.New("rate must be a positive finite number")
-
-	// ErrInvalidRequest is returned when the request has an empty key or a non-positive cost.
-	ErrInvalidRequest = errors.New("request key must be non-empty and cost must be a positive finite number")
-
-	// ErrCostExceedsLimit is returned when the request cost is greater than the bucket limit
-	// and therefore can never be satisfied.
-	ErrCostExceedsLimit = errors.New("cost exceeds bucket limit")
 )
 
 // Limiter is the contract for rate limiting implementations.
@@ -152,14 +135,8 @@ func (l *TokenBucketLimiter) Check(ctx context.Context, req Request) (Result, er
 
 	currentTime := l.clock.Now()
 	elapsed := currentTime.Sub(currentBucket.lastRefill).Seconds()
-	if elapsed < 0 {
-		elapsed = 0
-	}
-	currentBucket.tokens += elapsed * l.rate
 
-	if currentBucket.tokens > l.limit {
-		currentBucket.tokens = l.limit
-	}
+	currentBucket.tokens = refill(currentBucket.tokens, elapsed, l.rate, l.limit)
 
 	currentBucket.lastRefill = currentTime
 
@@ -178,4 +155,17 @@ func (l *TokenBucketLimiter) Check(ctx context.Context, req Request) (Result, er
 		Remaining:  currentBucket.tokens,
 		RetryAfter: time.Duration(math.Ceil(waitSeconds * float64(time.Second))),
 	}, nil
+}
+
+func refill(tokens, elapsed, rate, limit float64) float64 {
+	if elapsed < 0 {
+		elapsed = 0
+	}
+
+	tokens += elapsed * rate
+
+	if tokens > limit {
+		tokens = limit
+	}
+	return tokens
 }

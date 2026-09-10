@@ -1,0 +1,19 @@
+package limiter
+
+import "errors"
+
+// Sentinel errors returned by the package.
+var (
+	// ErrInvalidLimit is returned when the bucket limit is zero, negative, NaN or infinite.
+	ErrInvalidLimit = errors.New("limit must be a positive finite number")
+
+	// ErrInvalidRate is returned when the refill rate is zero, negative, NaN or infinite.
+	ErrInvalidRate = errors.New("rate must be a positive finite number")
+
+	// ErrInvalidRequest is returned when the request has an empty key or a non-positive cost.
+	ErrInvalidRequest = errors.New("request key must be non-empty and cost must be a positive finite number")
+
+	// ErrCostExceedsLimit is returned when the request cost is greater than the bucket limit
+	// and therefore can never be satisfied.
+	ErrCostExceedsLimit = errors.New("cost exceeds bucket limit")
+)
