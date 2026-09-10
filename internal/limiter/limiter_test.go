@@ -153,8 +153,13 @@ func TestNoOverflow(t *testing.T) {
 		t.Fatalf("NewRequest: %v", err)
 	}
 
-	res, err := l.Check(context.Background(), req)
+	if _, err := l.Check(context.Background(), req); err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+
 	l.clock.(*fakeClock).Add(10 * time.Minute)
+
+	res, err := l.Check(context.Background(), req)
 	if err != nil {
 		t.Fatalf("Check: %v", err)
 	}
@@ -180,6 +185,33 @@ func TestContextCancelled(t *testing.T) {
 
 	if _, err := l.Check(ctx, req); err == nil {
 		t.Error("expected error from cancelled context")
+	}
+}
+
+func TestRefillCases(t *testing.T) {
+	cases := []struct {
+		name    string
+		tokens  float64
+		elapsed float64
+		rate    float64
+		limit   float64
+		want    float64
+	}{
+		{"tokens > limit", 50, 1, 1, 10, 10},
+		{"tokens < limit", 5, 1, 1, 10, 6},
+		{"elapsed < 0", 5, -10, 1, 10, 5},
+		{"elapsed = 0", 5, 0, 1, 10, 5},
+		{"elapsed * rate = limit", 5, 1, 5, 10, 10},
+		{"elapsed * rate > limit", 5, 2, 5, 10, 10},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tokens := refill(tc.tokens, tc.elapsed, tc.rate, tc.limit)
+			if tokens != tc.want {
+				t.Errorf("Refill(%s) = %v, want = %f", tc.name, tokens, tc.want)
+			}
+		})
 	}
 }
 
