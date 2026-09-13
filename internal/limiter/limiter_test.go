@@ -62,6 +62,13 @@ func TestNanAndInf(t *testing.T) {
 	}
 }
 
+func TestRefillTooSlow(t *testing.T) {
+	_, err := NewTokenBucket(1_000_000, 1.0/86400)
+	if !errors.Is(err, ErrRefillTooSlow) {
+		t.Errorf("want ErrRefillTooSlow, got %v", err)
+	}
+}
+
 func TestHappyPath(t *testing.T) {
 	l, err := newTestLimiter(3, 1)
 	if err != nil {

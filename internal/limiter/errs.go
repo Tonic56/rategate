@@ -10,10 +10,16 @@ var (
 	// ErrInvalidRate is returned when the refill rate is zero, negative, NaN or infinite.
 	ErrInvalidRate = errors.New("rate must be a positive finite number")
 
-	// ErrInvalidRequest is returned when the request has an empty key or a non-positive cost.
+	// ErrInvalidRequest is returned when the request has an empty key or a cost
+	// that is not a positive finite number.
 	ErrInvalidRequest = errors.New("request key must be non-empty and cost must be a positive finite number")
 
 	// ErrCostExceedsLimit is returned when the request cost is greater than the bucket limit
 	// and therefore can never be satisfied.
 	ErrCostExceedsLimit = errors.New("cost exceeds bucket limit")
+
+	// ErrRefillTooSlow is returned by NewTokenBucket when a full refill
+	// (limit/rate seconds) would take longer than time.Duration can represent
+	// (about 292 years), so RetryAfter could not be computed.
+	ErrRefillTooSlow = errors.New("limit/rate too large: full refill must take less than ~292 years")
 )

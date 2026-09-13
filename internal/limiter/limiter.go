@@ -80,6 +80,11 @@ func NewTokenBucket(limit float64, rate float64) (*TokenBucketLimiter, error) {
 		return nil, ErrInvalidRate
 	}
 
+	maxWait := limit / rate
+	if maxWait >= float64(math.MaxInt64)/1e9 {
+		return nil, ErrRefillTooSlow
+	}
+
 	return &TokenBucketLimiter{
 		limit:   limit,
 		rate:    rate,
