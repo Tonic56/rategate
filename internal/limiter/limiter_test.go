@@ -3,12 +3,15 @@ package limiter
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"sync"
 	"testing"
 	"time"
 )
 
+// fakeClock is a clock that stands still until the test moves it with Add.
+// It is safe for concurrent use.
 type fakeClock struct {
 	current time.Time
 	mu      sync.Mutex
@@ -32,6 +35,8 @@ func (f *fakeClock) Add(d time.Duration) {
 	f.current = f.current.Add(d)
 }
 
+// newTestLimiter returns a limiter whose clock is a fakeClock set to
+// 2024-01-01 00:00:00 UTC. Move time with l.clock.(*fakeClock).Add.
 func newTestLimiter(limit, rate float64) (*TokenBucketLimiter, error) {
 	l, err := NewTokenBucket(limit, rate)
 	if err != nil {
@@ -91,7 +96,7 @@ func TestHappyPath(t *testing.T) {
 		}
 	}
 	if allowed != 3 {
-		t.Fatalf("Expected allowed=1: %d", allowed)
+		t.Fatalf("Expected allowed=3: %d", allowed)
 	}
 	allowed = 0
 	l.clock.(*fakeClock).Add(time.Second)
@@ -222,7 +227,7 @@ func TestRefillCases(t *testing.T) {
 	}
 }
 
-func TestConcurrent(t *testing.T) {
+func TestConcurrentCheck(t *testing.T) {
 	l, err := newTestLimiter(100, 1)
 	if err != nil {
 		t.Fatalf("NewTokenBucket: %v", err)
@@ -241,6 +246,7 @@ func TestConcurrent(t *testing.T) {
 			defer wg.Done()
 			res, err := l.Check(context.Background(), req)
 			if err != nil {
+				t.Errorf("Check: %v", err)
 				return
 			}
 			if res.Allowed {
@@ -255,5 +261,44 @@ func TestConcurrent(t *testing.T) {
 
 	if allowed != 100 {
 		t.Errorf("Expected exactly 100 allowed, got %d", allowed)
+	}
+}
+
+func TestConcurrentStore(t *testing.T) {
+	l, err := newTestLimiter(1, 1)
+	if err != nil {
+		t.Fatalf("NewTokenBucket: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	var allowed int
+	var mu sync.Mutex
+
+	for i := range 200 {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			key := fmt.Sprintf("192.168.1.%d", id)
+			req, err := NewRequest(key, 1)
+			if err != nil {
+				t.Errorf("NewRequest: %v", err)
+				return
+			}
+			res, err := l.Check(context.Background(), req)
+			if err != nil {
+				t.Errorf("Check: %v", err)
+				return
+			}
+			if res.Allowed {
+				mu.Lock()
+				allowed++
+				mu.Unlock()
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	if allowed != 200 {
+		t.Fatalf("Expected allowed = 200, got: %d", allowed)
 	}
 }
