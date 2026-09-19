@@ -69,7 +69,7 @@ func (r Request) validate() error {
 
 // NewTokenBucket creates a limiter with the given maximum number of tokens
 // (limit) and refill speed in tokens per second (rate).
-func NewTokenBucket(limit float64, rate float64) (*TokenBucketLimiter, error) {
+func NewTokenBucket(limit float64, rate float64, opts ...Option) (*TokenBucketLimiter, error) {
 	if limit <= 0 || math.IsInf(limit, 0) || math.IsNaN(limit) {
 		return nil, ErrInvalidLimit
 	}
@@ -82,11 +82,19 @@ func NewTokenBucket(limit float64, rate float64) (*TokenBucketLimiter, error) {
 		return nil, ErrRefillTooSlow
 	}
 
+	cfg := config{
+		clock: realClock{},
+	}
+
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+
 	return &TokenBucketLimiter{
 		limit: limit,
 		rate:  rate,
 		store: newShardedStore(),
-		clock: realClock{},
+		clock: cfg.clock,
 	}, nil
 }
 

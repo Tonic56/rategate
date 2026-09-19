@@ -38,11 +38,11 @@ func (f *fakeClock) Add(d time.Duration) {
 // newTestLimiter returns a limiter whose clock is a fakeClock set to
 // 2024-01-01 00:00:00 UTC. Move time with l.clock.(*fakeClock).Add.
 func newTestLimiter(limit, rate float64) (*TokenBucketLimiter, error) {
-	l, err := NewTokenBucket(limit, rate)
+	fc := newFakeClock(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
+	l, err := NewTokenBucket(limit, rate, withClock(fc))
 	if err != nil {
 		return nil, err
 	}
-	l.clock = newFakeClock(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
 	return l, nil
 }
 
