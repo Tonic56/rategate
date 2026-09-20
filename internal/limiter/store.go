@@ -67,3 +67,34 @@ func (s *shardedStore) withBucket(key string, now time.Time, initial float64, fn
 	}
 	fn(b)
 }
+
+// sweep removes idle buckets from every shard. Shards are locked one at a
+// time, so a sweep never blocks the whole store.
+func (s *shardedStore) sweep(now time.Time, idleTTL time.Duration) int {
+	var counter int
+	for _, sh := range s.shards {
+		counter += sh.sweep(now, idleTTL)
+	}
+
+	return counter
+}
+
+// sweep removes the buckets of this shard that have been idle for at least
+// idleTTL and returns how many were removed. A bucket idle that long is
+// already refilled to the limit, so a client cannot tell a removed bucket
+// from a fresh one.
+func (sh *shard) sweep(now time.Time, idleTTL time.Duration) int {
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+
+	var counter int
+
+	for key, b := range sh.buckets {
+		if now.Sub(b.lastRefill) >= idleTTL {
+			delete(sh.buckets, key)
+			counter++
+		}
+	}
+
+	return counter
+}

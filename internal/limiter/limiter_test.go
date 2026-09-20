@@ -298,3 +298,40 @@ func TestConcurrentStore(t *testing.T) {
 		t.Fatalf("expected allowed = 200, got: %d", allowed)
 	}
 }
+
+func TestSweepIsInvisibleToClients(t *testing.T) {
+	l, err := newTestLimiter(10, 1)
+	if err != nil {
+		t.Fatalf("newTestLimiter: %v", err)
+	}
+
+	req, err := NewRequest("ip:a", 1)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+
+	for range 10 {
+		_, err = l.Check(context.Background(), req)
+		if err != nil {
+			t.Fatalf("Check: %v", err)
+		}
+	}
+
+	l.clock.(*fakeClock).Add(5 * time.Second)
+	idleTTL := 10 * time.Second
+
+	removed := l.store.sweep(l.clock.Now(), idleTTL)
+
+	if removed != 0 {
+		t.Errorf("sweep removed %d buckets, want 0", removed)
+	}
+
+	res, err := l.Check(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+
+	if res.Remaining != 4 {
+		t.Errorf("expected Remaining = 4, got: %v", res.Remaining)
+	}
+}
