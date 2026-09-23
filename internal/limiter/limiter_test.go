@@ -221,7 +221,7 @@ func TestRefillCases(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			tokens := refill(tc.tokens, tc.elapsed, tc.rate, tc.limit)
 			if tokens != tc.want {
-				t.Errorf("refill(%s) = %v, want = %v", tc.name, tokens, tc.want)
+				t.Errorf("refill(%v, %v, %v, %v) = %v, want %v", tc.tokens, tc.elapsed, tc.rate, tc.limit, tokens, tc.want)
 			}
 		})
 	}
@@ -295,7 +295,7 @@ func TestConcurrentStore(t *testing.T) {
 	wg.Wait()
 
 	if allowed != 200 {
-		t.Fatalf("expected allowed = 200, got: %d", allowed)
+		t.Fatalf("expected 200 allowed, got %d", allowed)
 	}
 }
 
@@ -332,6 +332,6 @@ func TestSweepIsInvisibleToClients(t *testing.T) {
 	}
 
 	if res.Remaining != 4 {
-		t.Errorf("expected Remaining = 4, got: %v", res.Remaining)
+		t.Errorf("expected Remaining=4 (refilled 5, minus 1), got %v", res.Remaining)
 	}
 }
