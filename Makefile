@@ -1,4 +1,4 @@
-.PHONY: test lint fmt vet ci
+.PHONY: test lint fmt vet fix fixcheck ci
 
 lint:
 	golangci-lint run
@@ -12,4 +12,10 @@ fmt:
 vet:
 	go vet ./...
 
-ci:	fmt vet lint test
+fix:
+	go fix ./...
+
+fixcheck:
+	go fix -diff ./...
+
+ci:	fmt vet lint fixcheck test
