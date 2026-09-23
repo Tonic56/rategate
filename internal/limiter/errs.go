@@ -22,4 +22,8 @@ var (
 	// (limit/rate seconds) would take longer than time.Duration can represent
 	// (about 292 years), so RetryAfter could not be computed.
 	ErrRefillTooSlow = errors.New("limit/rate too large: full refill must take less than ~292 years")
+
+	// ErrInvalidSweepInterval is returned by NewTokenBucket when the interval
+	// set with WithSweepInterval is zero or negative.
+	ErrInvalidSweepInterval = errors.New("sweep interval must be positive")
 )

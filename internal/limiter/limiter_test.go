@@ -7,6 +7,7 @@ import (
 	"math"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -227,6 +228,26 @@ func TestRefillCases(t *testing.T) {
 	}
 }
 
+func TestIdleTTL(t *testing.T) {
+	cases := []struct {
+		name  string
+		limit float64
+		rate  float64
+		want  time.Duration
+	}{
+		{"short refill uses minimum", 10, 1, time.Minute},
+		{"long refill is kept", 1000, 1, 16*time.Minute + 40*time.Second},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := idleTTL(tc.limit, tc.rate); got != tc.want {
+				t.Errorf("idleTTL(%v, %v) = %v, want %v", tc.limit, tc.rate, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestConcurrentCheck(t *testing.T) {
 	l, err := newTestLimiter(100, 1)
 	if err != nil {
@@ -334,4 +355,71 @@ func TestSweepIsInvisibleToClients(t *testing.T) {
 	if res.Remaining != 4 {
 		t.Errorf("expected Remaining=4 (refilled 5, minus 1), got %v", res.Remaining)
 	}
+}
+
+func TestRunRemovesIdleBuckets(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		l, err := NewTokenBucket(10, 1, WithSweepInterval(time.Minute))
+		if err != nil {
+			t.Fatalf("NewTokenBucket: %v", err)
+		}
+		go l.Run(t.Context())
+		req, err := NewRequest("ip:1", 5)
+		if err != nil {
+			t.Fatalf("NewRequest: %v", err)
+		}
+
+		if _, err := l.Check(t.Context(), req); err != nil {
+			t.Fatalf("Check: %v", err)
+		}
+
+		if n := countBuckets(l.store); n != 1 {
+			t.Fatalf("before the janitor ran: %d buckets, want 1", n)
+		}
+
+		time.Sleep(3 * time.Minute)
+
+		synctest.Wait()
+
+		if n := countBuckets(l.store); n != 0 {
+			t.Errorf("%d buckets left after the janitor ran, want 0", n)
+		}
+	})
+}
+
+func TestRunStopsWhenContextIsCancelled(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		l, err := NewTokenBucket(10, 1, WithSweepInterval(time.Minute))
+		if err != nil {
+			t.Fatalf("NewTokenBucket: %v", err)
+		}
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		go l.Run(ctx)
+
+		req, err := NewRequest("ip:1", 5)
+		if err != nil {
+			t.Fatalf("NewRequest: %v", err)
+		}
+
+		if _, err := l.Check(t.Context(), req); err != nil {
+			t.Fatalf("Check: %v", err)
+		}
+
+		if n := countBuckets(l.store); n != 1 {
+			t.Fatalf("before the janitor ran: %d buckets, want 1", n)
+		}
+
+		cancel()
+
+		synctest.Wait()
+
+		time.Sleep(3 * time.Minute)
+
+		synctest.Wait()
+
+		if n := countBuckets(l.store); n != 1 {
+			t.Errorf("%d buckets left after Run was stopped, want 1 (nothing may be removed)", n)
+		}
+	})
 }
