@@ -2,8 +2,14 @@ name: CI
 
 on:
   push:
-    branches: [main]
   pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test-and-build:
@@ -15,16 +21,15 @@ jobs:
       - name: Setup go
         uses: actions/setup-go@v5
         with:
-          go-version: 'stable'
-          cache: true
+          go-version-file: go.mod
 
-      - name: linter 
+      - name: Lint
         uses: golangci/golangci-lint-action@v7
         with:
-          version: latest
-      
+          version: v2.13.2
+
       - name: Run tests
-        run: go test -race ./...
+        run: go test -race -shuffle=on ./...
 
       - name: Build
         run: go build -v ./...
