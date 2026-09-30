@@ -38,60 +38,71 @@ func (f *fakeClock) Add(d time.Duration) {
 
 // newTestLimiter returns a limiter whose clock is a fakeClock set to
 // 2024-01-01 00:00:00 UTC. Move time with l.clock.(*fakeClock).Add.
-func newTestLimiter(limit, rate float64) (*TokenBucketLimiter, error) {
+// The test fails right away if the limiter cannot be created.
+func newTestLimiter(t testing.TB, limit, rate float64) *TokenBucketLimiter {
+	t.Helper()
 	fc := newFakeClock(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
 	l, err := NewTokenBucket(limit, rate, withClock(fc))
 	if err != nil {
-		return nil, err
+		t.Fatalf("newTestLimiter: %v", err)
 	}
-	return l, nil
+	return l
 }
 
 func TestInvalidLimit(t *testing.T) {
-	if _, err := NewTokenBucket(0, 1); !errors.Is(err, ErrInvalidLimit) {
-		t.Errorf("expected ErrInvalidLimit, got %v", err)
-	}
+	expectErr(t, 0, 1, ErrInvalidLimit)
 }
 
 func TestInvalidRate(t *testing.T) {
-	if _, err := NewTokenBucket(1, 0); !errors.Is(err, ErrInvalidRate) {
-		t.Errorf("expected ErrInvalidRate, got %v", err)
+	expectErr(t, 1, 0, ErrInvalidRate)
+}
+
+func TestNaNAndInf(t *testing.T) {
+	expectErr(t, math.Inf(1), 1, ErrInvalidLimit)
+
+	expectErr(t, 1, math.NaN(), ErrInvalidRate)
+}
+
+func TestInvalidSweepInterval(t *testing.T) {
+	if _, err := NewTokenBucket(1, 1, WithSweepInterval(0)); !errors.Is(err, ErrInvalidSweepInterval) {
+		t.Fatalf("got %v, want %v", err, ErrInvalidSweepInterval)
 	}
 }
 
-func TestNanAndInf(t *testing.T) {
-	if _, err := NewTokenBucket(math.Inf(1), 1); !errors.Is(err, ErrInvalidLimit) {
-		t.Errorf("expected ErrInvalidLimit for Inf limit, got %v", err)
+func TestInvalidRequest(t *testing.T) {
+	cases := []struct {
+		name string
+		key  string
+		cost float64
+	}{
+		{"empty key", "", 1},
+		{"zero cost", "ip:1", 0},
+		{"negative cost", "ip:1", -1},
+		{"cost +Inf", "ip:1", math.Inf(1)},
+		{"cost -Inf", "ip:1", math.Inf(-1)},
+		{"cost NaN", "ip:1", math.NaN()},
 	}
-	if _, err := NewTokenBucket(1, math.NaN()); !errors.Is(err, ErrInvalidRate) {
-		t.Errorf("expected ErrInvalidRate for NaN rate, got %v", err)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := NewRequest(tc.key, tc.cost); !errors.Is(err, ErrInvalidRequest) {
+				t.Errorf("got %v, want %v", err, ErrInvalidRequest)
+			}
+		})
 	}
 }
 
 func TestRefillTooSlow(t *testing.T) {
-	_, err := NewTokenBucket(1_000_000, 1.0/86400)
-	if !errors.Is(err, ErrRefillTooSlow) {
-		t.Errorf("want ErrRefillTooSlow, got %v", err)
-	}
+	expectErr(t, 1_000_000, 1.0/86400, ErrRefillTooSlow)
 }
 
 func TestHappyPath(t *testing.T) {
-	l, err := newTestLimiter(3, 1)
-	if err != nil {
-		t.Fatalf("newTestLimiter: %v", err)
-	}
+	l := newTestLimiter(t, 3, 1)
 
-	req, err := NewRequest("ip:1", 1)
-	if err != nil {
-		t.Fatalf("NewRequest: %v", err)
-	}
+	req := mustNewRequest(t, "ip:1", 1)
 
 	var allowed int
 	for range 4 {
-		res, err := l.Check(context.Background(), req)
-		if err != nil {
-			t.Fatalf("Check: %v", err)
-		}
+		res := mustCheck(t, l, req)
 		if res.Allowed {
 			allowed++
 		}
@@ -102,10 +113,7 @@ func TestHappyPath(t *testing.T) {
 	allowed = 0
 	l.clock.(*fakeClock).Add(time.Second)
 	for range 2 {
-		res, err := l.Check(context.Background(), req)
-		if err != nil {
-			t.Fatalf("Check: %v", err)
-		}
+		res := mustCheck(t, l, req)
 		if res.Allowed {
 			allowed++
 		}
@@ -116,82 +124,63 @@ func TestHappyPath(t *testing.T) {
 }
 
 func TestDifferentKeys(t *testing.T) {
-	l, err := newTestLimiter(1, 1)
-	if err != nil {
-		t.Fatalf("newTestLimiter: %v", err)
-	}
+	l := newTestLimiter(t, 1, 1)
 
-	reqA, err := NewRequest("ip:a", 1)
-	if err != nil {
-		t.Fatalf("NewRequest: %v", err)
-	}
-	reqB, err := NewRequest("ip:b", 1)
-	if err != nil {
-		t.Fatalf("NewRequest: %v", err)
-	}
+	reqA := mustNewRequest(t, "ip:a", 1)
+	reqB := mustNewRequest(t, "ip:b", 1)
 
-	res, err := l.Check(context.Background(), reqA)
-	if err != nil {
-		t.Fatalf("Check: %v", err)
-	}
+	res := mustCheck(t, l, reqA)
 	if !res.Allowed {
 		t.Error("ip:a: expected Allowed=true")
 	}
 
-	res, err = l.Check(context.Background(), reqA)
-	if err != nil {
-		t.Fatalf("Check: %v", err)
-	}
+	res = mustCheck(t, l, reqA)
 	if res.Allowed {
 		t.Error("ip:a again: expected Allowed=false")
 	}
 
-	res, err = l.Check(context.Background(), reqB)
-	if err != nil {
-		t.Fatalf("Check: %v", err)
-	}
+	res = mustCheck(t, l, reqB)
 	if !res.Allowed {
-		t.Errorf("ip:b expected Allowed=true")
+		t.Error("ip:b expected Allowed=true")
+	}
+}
+
+func TestCostExceedsLimit(t *testing.T) {
+	l := newTestLimiter(t, 10, 1)
+	req := mustNewRequest(t, "ip:1", 11)
+
+	if _, err := l.Check(t.Context(), req); !errors.Is(err, ErrCostExceedsLimit) {
+		t.Fatalf("got %v, want %v", err, ErrCostExceedsLimit)
+	}
+}
+
+func TestCheckRejectsInvalidRequest(t *testing.T) {
+	l := newTestLimiter(t, 10, 1)
+
+	if _, err := l.Check(t.Context(), Request{Key: "", Cost: 1}); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("got %v, want %v", err, ErrInvalidRequest)
 	}
 }
 
 func TestRefillCapsAtLimit(t *testing.T) {
-	l, err := newTestLimiter(10, 100)
-	if err != nil {
-		t.Fatalf("newTestLimiter: %v", err)
-	}
+	l := newTestLimiter(t, 10, 100)
 
-	req, err := NewRequest("ip:1", 1)
-	if err != nil {
-		t.Fatalf("NewRequest: %v", err)
-	}
+	req := mustNewRequest(t, "ip:1", 1)
 
-	if _, err := l.Check(context.Background(), req); err != nil {
-		t.Fatalf("Check: %v", err)
-	}
+	mustCheck(t, l, req)
 
 	l.clock.(*fakeClock).Add(10 * time.Minute)
 
-	res, err := l.Check(context.Background(), req)
-	if err != nil {
-		t.Fatalf("Check: %v", err)
-	}
-
+	res := mustCheck(t, l, req)
 	if res.Remaining != 9 {
 		t.Errorf("expected Remaining=9 (refilled to limit 10, minus 1), got %f", res.Remaining)
 	}
 }
 
 func TestContextCancelled(t *testing.T) {
-	l, err := newTestLimiter(10, 1)
-	if err != nil {
-		t.Fatalf("newTestLimiter: %v", err)
-	}
+	l := newTestLimiter(t, 10, 1)
 
-	req, err := NewRequest("ip:1", 1)
-	if err != nil {
-		t.Fatalf("NewRequest: %v", err)
-	}
+	req := mustNewRequest(t, "ip:1", 1)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -249,14 +238,9 @@ func TestIdleTTL(t *testing.T) {
 }
 
 func TestConcurrentCheck(t *testing.T) {
-	l, err := newTestLimiter(100, 1)
-	if err != nil {
-		t.Fatalf("newTestLimiter: %v", err)
-	}
-	req, err := NewRequest("ip:1", 1)
-	if err != nil {
-		t.Fatalf("NewRequest: %v", err)
-	}
+	l := newTestLimiter(t, 100, 1)
+
+	req := mustNewRequest(t, "ip:1", 1)
 
 	var wg sync.WaitGroup
 	var allowed int
@@ -284,10 +268,7 @@ func TestConcurrentCheck(t *testing.T) {
 }
 
 func TestConcurrentStore(t *testing.T) {
-	l, err := newTestLimiter(1, 1)
-	if err != nil {
-		t.Fatalf("newTestLimiter: %v", err)
-	}
+	l := newTestLimiter(t, 1, 1)
 
 	var wg sync.WaitGroup
 	var allowed int
@@ -321,21 +302,12 @@ func TestConcurrentStore(t *testing.T) {
 }
 
 func TestSweepIsInvisibleToClients(t *testing.T) {
-	l, err := newTestLimiter(10, 1)
-	if err != nil {
-		t.Fatalf("newTestLimiter: %v", err)
-	}
+	l := newTestLimiter(t, 10, 1)
 
-	req, err := NewRequest("ip:a", 1)
-	if err != nil {
-		t.Fatalf("NewRequest: %v", err)
-	}
+	req := mustNewRequest(t, "ip:a", 1)
 
 	for range 10 {
-		_, err = l.Check(context.Background(), req)
-		if err != nil {
-			t.Fatalf("Check: %v", err)
-		}
+		mustCheck(t, l, req)
 	}
 
 	l.clock.(*fakeClock).Add(5 * time.Second)
@@ -347,11 +319,7 @@ func TestSweepIsInvisibleToClients(t *testing.T) {
 		t.Errorf("sweep removed %d buckets, want 0", removed)
 	}
 
-	res, err := l.Check(context.Background(), req)
-	if err != nil {
-		t.Fatalf("Check: %v", err)
-	}
-
+	res := mustCheck(t, l, req)
 	if res.Remaining != 4 {
 		t.Errorf("expected Remaining=4 (refilled 5, minus 1), got %v", res.Remaining)
 	}
@@ -364,14 +332,9 @@ func TestRunRemovesIdleBuckets(t *testing.T) {
 			t.Fatalf("NewTokenBucket: %v", err)
 		}
 		go l.Run(t.Context())
-		req, err := NewRequest("ip:1", 5)
-		if err != nil {
-			t.Fatalf("NewRequest: %v", err)
-		}
+		req := mustNewRequest(t, "ip:1", 5)
 
-		if _, err := l.Check(t.Context(), req); err != nil {
-			t.Fatalf("Check: %v", err)
-		}
+		mustCheck(t, l, req)
 
 		if n := countBuckets(l.store); n != 1 {
 			t.Fatalf("before the janitor ran: %d buckets, want 1", n)
@@ -393,18 +356,15 @@ func TestRunStopsWhenContextIsCancelled(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewTokenBucket: %v", err)
 		}
+
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
+
 		go l.Run(ctx)
 
-		req, err := NewRequest("ip:1", 5)
-		if err != nil {
-			t.Fatalf("NewRequest: %v", err)
-		}
+		req := mustNewRequest(t, "ip:1", 5)
 
-		if _, err := l.Check(t.Context(), req); err != nil {
-			t.Fatalf("Check: %v", err)
-		}
+		mustCheck(t, l, req)
 
 		if n := countBuckets(l.store); n != 1 {
 			t.Fatalf("before the janitor ran: %d buckets, want 1", n)
@@ -422,4 +382,37 @@ func TestRunStopsWhenContextIsCancelled(t *testing.T) {
 			t.Errorf("%d buckets left after Run was stopped, want 1 (nothing may be removed)", n)
 		}
 	})
+}
+
+// expectErr checks that NewTokenBucket(limit, rate) fails with want.
+func expectErr(t testing.TB, limit, rate float64, want error) {
+	t.Helper()
+	if _, err := NewTokenBucket(limit, rate); !errors.Is(err, want) {
+		t.Errorf("NewTokenBucket(%v, %v): got %v, want %v", limit, rate, err, want)
+	}
+}
+
+// mustNewRequest returns a valid request or fails the test.
+func mustNewRequest(t testing.TB, key string, cost float64) Request {
+	t.Helper()
+
+	req, err := NewRequest(key, cost)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+
+	return req
+}
+
+// mustCheck runs l.Check and fails the test on error. Like any helper that
+// calls t.Fatal, it must only be called from the test's own goroutine.
+func mustCheck(t testing.TB, l *TokenBucketLimiter, req Request) Result {
+	t.Helper()
+
+	res, err := l.Check(t.Context(), req)
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+
+	return res
 }
