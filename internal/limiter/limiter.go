@@ -86,7 +86,7 @@ func (r Request) validate() error {
 // NewTokenBucket creates a limiter with the given maximum number of tokens
 // (limit) and refill speed in tokens per second (rate). It does not start any
 // background work: call Run to remove idle buckets.
-func NewTokenBucket(limit float64, rate float64, opts ...Option) (*TokenBucketLimiter, error) {
+func NewTokenBucket(limit, rate float64, opts ...Option) (*TokenBucketLimiter, error) {
 	if limit <= 0 || math.IsInf(limit, 0) || math.IsNaN(limit) {
 		return nil, ErrInvalidLimit
 	}
@@ -217,7 +217,7 @@ func (l *TokenBucketLimiter) tryConsume(b *bucket, req Request) Result {
 // minIdleTTL. A bucket idle that long is full again, so dropping it is
 // invisible to the client. The conversion cannot overflow because
 // NewTokenBucket rejects limit/rate values that do not fit in a Duration.
-func idleTTL(limit float64, rate float64) time.Duration {
+func idleTTL(limit, rate float64) time.Duration {
 	return max(time.Duration((limit/rate)*float64(time.Second)), minIdleTTL)
 }
 
