@@ -43,14 +43,16 @@ func (s *shardedStore) shardFor(key string) *shard {
 	return s.shards[h.Sum32()%shardCount]
 }
 
-// withBucket calls fn with the bucket for key, creating it with initial
-// tokens and lastRefill = now if the key is new.
+// withBucket calls fn with the bucket for key. A key seen for the first time
+// gets an empty bucket and fn is told so with created = true; how a new
+// bucket starts is up to the caller, the store knows nothing about time or
+// tokens.
 //
 // The shard lock is held for the whole lookup-or-create and for fn, so
 // nothing can observe or delete the bucket halfway through an update. For
 // the same reason fn must be quick, must not block and must not keep b
 // after it returns.
-func (s *shardedStore) withBucket(key string, now time.Time, initial float64, fn func(b *bucket)) {
+func (s *shardedStore) withBucket(key string, fn func(b *bucket, created bool)) {
 	sh := s.shardFor(key)
 
 	sh.mu.Lock()
@@ -59,13 +61,11 @@ func (s *shardedStore) withBucket(key string, now time.Time, initial float64, fn
 	b, exists := sh.buckets[key]
 
 	if !exists {
-		b = &bucket{
-			tokens:     initial,
-			lastRefill: now,
-		}
+		b = &bucket{}
 		sh.buckets[key] = b
 	}
-	fn(b)
+
+	fn(b, !exists)
 }
 
 // sweep removes idle buckets from every shard. Shards are locked one at a
