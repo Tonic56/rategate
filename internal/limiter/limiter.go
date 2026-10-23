@@ -86,7 +86,7 @@ func (r Request) validate() error {
 // NewTokenBucket creates a limiter with the given maximum number of tokens
 // (limit) and refill speed in tokens per second (rate). It does not start any
 // background work: call Run to remove idle buckets.
-func NewTokenBucket(limit float64, rate float64, opts ...Option) (*TokenBucketLimiter, error) {
+func NewTokenBucket(limit, rate float64, opts ...Option) (*TokenBucketLimiter, error) {
 	if limit <= 0 || math.IsInf(limit, 0) || math.IsNaN(limit) {
 		return nil, ErrInvalidLimit
 	}
@@ -154,10 +154,16 @@ func (l *TokenBucketLimiter) Check(ctx context.Context, req Request) (Result, er
 
 	var result Result
 
-	// The time passed here is only used as lastRefill for a brand-new bucket;
-	// tryConsume reads the clock again once the lock is held.
-	l.store.withBucket(req.Key, l.clock.Now(), l.limit, func(b *bucket) {
-		result = l.tryConsume(b, req)
+	// The clock is read once, inside the callback, so under the shard lock:
+	// a brand-new bucket starts full at that moment and an existing one is
+	// refilled up to it.
+	l.store.withBucket(req.Key, func(b *bucket, created bool) {
+		now := l.clock.Now()
+		if created {
+			b.tokens = l.limit
+			b.lastRefill = now
+		}
+		result = l.tryConsume(b, req, now)
 	})
 
 	return result, nil
@@ -179,16 +185,15 @@ func refill(tokens, elapsed, rate, limit float64) float64 {
 	return tokens
 }
 
-// tryConsume refills b up to the current time and then either takes req.Cost
-// tokens or computes how long the client has to wait.
+// tryConsume refills b up to now and then either takes req.Cost tokens or
+// computes how long the client has to wait.
 //
-// It must be called with the lock protecting b held (see store.withBucket).
-// The current time is read here, under that lock, on purpose: a time read
-// before waiting for the lock may be older than b.lastRefill written by
-// another goroutine, and storing it would move lastRefill backwards so the
-// same interval gets refilled twice.
-func (l *TokenBucketLimiter) tryConsume(b *bucket, req Request) Result {
-	now := l.clock.Now()
+// It must be called with the lock protecting b held (see store.withBucket),
+// and now must be read under that same lock: a time read before waiting for
+// the lock may be older than b.lastRefill written by another goroutine, and
+// storing it would move lastRefill backwards so the same interval gets
+// refilled twice.
+func (l *TokenBucketLimiter) tryConsume(b *bucket, req Request, now time.Time) Result {
 	elapsed := now.Sub(b.lastRefill).Seconds()
 
 	b.tokens = refill(b.tokens, elapsed, l.rate, l.limit)
@@ -217,7 +222,7 @@ func (l *TokenBucketLimiter) tryConsume(b *bucket, req Request) Result {
 // minIdleTTL. A bucket idle that long is full again, so dropping it is
 // invisible to the client. The conversion cannot overflow because
 // NewTokenBucket rejects limit/rate values that do not fit in a Duration.
-func idleTTL(limit float64, rate float64) time.Duration {
+func idleTTL(limit, rate float64) time.Duration {
 	return max(time.Duration((limit/rate)*float64(time.Second)), minIdleTTL)
 }
 
