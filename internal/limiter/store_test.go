@@ -17,7 +17,6 @@ func countBuckets(s *shardedStore) int {
 }
 
 func TestSweepRemovesIdleBuckets(t *testing.T) {
-
 	s := newShardedStore()
 	t0 := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 
@@ -32,7 +31,7 @@ func TestSweepRemovesIdleBuckets(t *testing.T) {
 	}
 
 	if left := countBuckets(s); left != 0 {
-		t.Errorf("%d buckets left in the store want 0", left)
+		t.Errorf("%d buckets left in the store, want 0", left)
 	}
 }
 
@@ -51,7 +50,7 @@ func TestSweepBoundary(t *testing.T) {
 	}
 
 	if left := countBuckets(s); left != 2 {
-		t.Errorf("%d buckets left in the store want 2", left)
+		t.Errorf("%d buckets left in the store, want 2", left)
 	}
 }
 
@@ -70,6 +69,6 @@ func TestSweepKeepsRecentBuckets(t *testing.T) {
 	}
 
 	if left := countBuckets(s); left != 1 {
-		t.Errorf("%d buckets left in the store want 1", left)
+		t.Errorf("%d buckets left in the store, want 1", left)
 	}
 }

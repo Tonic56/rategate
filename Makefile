@@ -15,7 +15,7 @@ cover:
 	rm -f coverage.out
 
 fmt:
-	gofmt -w .
+	golangci-lint fmt
 
 vet:
 	go vet ./...

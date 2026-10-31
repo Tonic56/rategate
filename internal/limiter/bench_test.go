@@ -104,8 +104,8 @@ func BenchmarkMemoryPerKey(b *testing.B) {
 		perKey += (filled - before) / keys
 		perKeySwept += (swept - before) / keys
 	}
-	b.ReportMetric((perKey)/float64(b.N), "B/key")
-	b.ReportMetric((perKeySwept)/float64(b.N), "B/key-after-sweep")
+	b.ReportMetric(perKey/float64(b.N), "B/key")
+	b.ReportMetric(perKeySwept/float64(b.N), "B/key-after-sweep")
 }
 
 // liveHeap runs a garbage collection and returns the bytes held by live heap

@@ -39,12 +39,12 @@ func (f *fakeClock) Add(d time.Duration) {
 // newTestLimiter returns a limiter whose clock is a fakeClock set to
 // 2024-01-01 00:00:00 UTC. Move time with l.clock.(*fakeClock).Add.
 // The test fails right away if the limiter cannot be created.
-func newTestLimiter(t testing.TB, limit, rate float64) *TokenBucketLimiter {
-	t.Helper()
+func newTestLimiter(tb testing.TB, limit, rate float64) *TokenBucketLimiter {
+	tb.Helper()
 	fc := newFakeClock(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
 	l, err := NewTokenBucket(limit, rate, withClock(fc))
 	if err != nil {
-		t.Fatalf("newTestLimiter: %v", err)
+		tb.Fatalf("newTestLimiter: %v", err)
 	}
 	return l
 }
@@ -385,20 +385,20 @@ func TestRunStopsWhenContextIsCancelled(t *testing.T) {
 }
 
 // expectErr checks that NewTokenBucket(limit, rate) fails with want.
-func expectErr(t testing.TB, limit, rate float64, want error) {
-	t.Helper()
+func expectErr(tb testing.TB, limit, rate float64, want error) {
+	tb.Helper()
 	if _, err := NewTokenBucket(limit, rate); !errors.Is(err, want) {
-		t.Errorf("NewTokenBucket(%v, %v): got %v, want %v", limit, rate, err, want)
+		tb.Errorf("NewTokenBucket(%v, %v): got %v, want %v", limit, rate, err, want)
 	}
 }
 
 // mustNewRequest returns a valid request or fails the test.
-func mustNewRequest(t testing.TB, key string, cost float64) Request {
-	t.Helper()
+func mustNewRequest(tb testing.TB, key string, cost float64) Request {
+	tb.Helper()
 
 	req, err := NewRequest(key, cost)
 	if err != nil {
-		t.Fatalf("NewRequest: %v", err)
+		tb.Fatalf("NewRequest: %v", err)
 	}
 
 	return req
@@ -406,12 +406,12 @@ func mustNewRequest(t testing.TB, key string, cost float64) Request {
 
 // mustCheck runs l.Check and fails the test on error. Like any helper that
 // calls t.Fatal, it must only be called from the test's own goroutine.
-func mustCheck(t testing.TB, l *TokenBucketLimiter, req Request) Result {
-	t.Helper()
+func mustCheck(tb testing.TB, l *TokenBucketLimiter, req Request) Result {
+	tb.Helper()
 
-	res, err := l.Check(t.Context(), req)
+	res, err := l.Check(tb.Context(), req)
 	if err != nil {
-		t.Fatalf("Check: %v", err)
+		tb.Fatalf("Check: %v", err)
 	}
 
 	return res
