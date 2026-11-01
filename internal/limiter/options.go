@@ -23,7 +23,7 @@ func withClock(c clock) Option {
 }
 
 // WithSweepInterval sets how often Run removes idle buckets. A shorter
-// interval frees memory sooner, a longer one locks the shards less often.
+// interval frees memory sooner, while a longer one locks the shards less often.
 // The default is one minute; d must be positive.
 func WithSweepInterval(d time.Duration) Option {
 	return func(cfg *config) {

@@ -44,8 +44,8 @@ func (s *shardedStore) shardFor(key string) *shard {
 }
 
 // withBucket calls fn with the bucket for key. A key seen for the first time
-// gets an empty bucket and fn is told so with created = true; how a new
-// bucket starts is up to the caller, the store knows nothing about time or
+// gets an empty bucket and fn is told so with created = true. How a new
+// bucket starts is up to the caller: the store knows nothing about time or
 // tokens.
 //
 // The shard lock is held for the whole lookup-or-create and for fn, so
