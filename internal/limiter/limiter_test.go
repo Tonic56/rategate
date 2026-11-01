@@ -37,7 +37,7 @@ func (f *fakeClock) Add(d time.Duration) {
 }
 
 // newTestLimiter returns a limiter whose clock is a fakeClock set to
-// 2024-01-01 00:00:00 UTC. Move time with l.clock.(*fakeClock).Add.
+// 2024-01-01 00:00:00 UTC. Move time with advance.
 // The test fails right away if the limiter cannot be created.
 func newTestLimiter(tb testing.TB, limit, rate float64) *TokenBucketLimiter {
 	tb.Helper()
@@ -111,7 +111,7 @@ func TestHappyPath(t *testing.T) {
 		t.Fatalf("expected 3 allowed, got %d", allowed)
 	}
 	allowed = 0
-	l.clock.(*fakeClock).Add(time.Second)
+	advance(l, time.Second)
 	for range 2 {
 		res := mustCheck(t, l, req)
 		if res.Allowed {
@@ -141,7 +141,7 @@ func TestDifferentKeys(t *testing.T) {
 
 	res = mustCheck(t, l, reqB)
 	if !res.Allowed {
-		t.Error("ip:b expected Allowed=true")
+		t.Error("ip:b: expected Allowed=true")
 	}
 }
 
@@ -169,7 +169,7 @@ func TestRefillCapsAtLimit(t *testing.T) {
 
 	mustCheck(t, l, req)
 
-	l.clock.(*fakeClock).Add(10 * time.Minute)
+	advance(l, 10*time.Minute)
 
 	res := mustCheck(t, l, req)
 	if res.Remaining != 9 {
@@ -212,6 +212,42 @@ func TestRefillCases(t *testing.T) {
 			tokens := refill(tc.tokens, tc.elapsed, tc.rate, tc.limit)
 			if tokens != tc.want {
 				t.Errorf("refill(%v, %v, %v, %v) = %v, want %v", tc.tokens, tc.elapsed, tc.rate, tc.limit, tokens, tc.want)
+			}
+		})
+	}
+}
+
+// TestDeniedResult checks what a client is told when a request is denied. Each
+// case can expose mistakes the others cannot: with no tokens Cost-tokens equals
+// Cost, with rate 1 dividing equals multiplying, and only a wait that is not a
+// whole number of nanoseconds shows whether it is rounded up.
+func TestDeniedResult(t *testing.T) {
+	cases := []struct {
+		name           string
+		limit          float64
+		rate           float64
+		spend          float64
+		wait           time.Duration
+		cost           float64
+		wantRetryAfter time.Duration
+		wantRemaining  float64
+	}{
+		{"empty bucket", 10, 2, 10, 0, 1, 500 * time.Millisecond, 0},
+		{"partly refilled", 10, 2, 10, 300 * time.Millisecond, 1, 200 * time.Millisecond, 0.6},
+		{"some tokens left", 10, 1, 7, 0, 5, 2 * time.Second, 3},
+		{"wait rounds up", 10, 3, 10, 0, 1, 333333334 * time.Nanosecond, 0},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			l := newTestLimiter(t, tc.limit, tc.rate)
+			mustCheck(t, l, mustNewRequest(t, "ip:1", tc.spend))
+			advance(l, tc.wait)
+			res := mustCheck(t, l, mustNewRequest(t, "ip:1", tc.cost))
+
+			want := Result{Allowed: false, RetryAfter: tc.wantRetryAfter, Remaining: tc.wantRemaining}
+			if res != want {
+				t.Errorf("got %+v, want %+v", res, want)
 			}
 		})
 	}
@@ -301,7 +337,7 @@ func TestConcurrentStore(t *testing.T) {
 	}
 }
 
-func TestSweepIsInvisibleToClients(t *testing.T) {
+func TestSweepKeepsBucketUntilFull(t *testing.T) {
 	l := newTestLimiter(t, 10, 1)
 
 	req := mustNewRequest(t, "ip:a", 1)
@@ -310,7 +346,7 @@ func TestSweepIsInvisibleToClients(t *testing.T) {
 		mustCheck(t, l, req)
 	}
 
-	l.clock.(*fakeClock).Add(5 * time.Second)
+	advance(l, 5*time.Second)
 	idleTTL := 10 * time.Second
 
 	removed := l.store.sweep(l.clock.Now(), idleTTL)
@@ -322,6 +358,40 @@ func TestSweepIsInvisibleToClients(t *testing.T) {
 	res := mustCheck(t, l, req)
 	if res.Remaining != 4 {
 		t.Errorf("expected Remaining=4 (refilled 5, minus 1), got %v", res.Remaining)
+	}
+}
+
+// TestSweepIsInvisibleToClients removes a bucket at the moment it becomes full
+// and checks that the next request gets the answer the old bucket would give.
+// That answer is the same with or without the removal, so the test also has to
+// check that the bucket is really gone.
+func TestSweepIsInvisibleToClients(t *testing.T) {
+	l := newTestLimiter(t, 10, 1)
+
+	req := mustNewRequest(t, "ip:1", 1)
+
+	for range 10 {
+		mustCheck(t, l, req)
+	}
+
+	advance(l, 10*time.Second)
+
+	idleTTL := 10 * time.Second
+
+	removed := l.store.sweep(l.clock.Now(), idleTTL)
+
+	if removed != 1 || countBuckets(l.store) != 0 {
+		t.Errorf("sweep removed %d buckets and left %d, want 1 and 0", removed, countBuckets(l.store))
+	}
+
+	res := mustCheck(t, l, req)
+
+	if !res.Allowed || res.Remaining != 9 || res.RetryAfter != 0 {
+		t.Errorf("got %+v, want Allowed=true, Remaining=9 (a new bucket of 10, minus 1), RetryAfter=0", res)
+	}
+
+	if b := countBuckets(l.store); b != 1 {
+		t.Errorf("%d buckets after Check, want 1", b)
 	}
 }
 
@@ -382,6 +452,11 @@ func TestRunStopsWhenContextIsCancelled(t *testing.T) {
 			t.Errorf("%d buckets left after Run was stopped, want 1 (nothing may be removed)", n)
 		}
 	})
+}
+
+// advance moves the fakeClock of a limiter from newTestLimiter forward by d.
+func advance(l *TokenBucketLimiter, d time.Duration) {
+	l.clock.(*fakeClock).Add(d)
 }
 
 // expectErr checks that NewTokenBucket(limit, rate) fails with want.
