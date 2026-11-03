@@ -3,6 +3,8 @@ package limiter
 import (
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
 )
 
 // countBuckets returns how many buckets the store holds across all shards.
@@ -26,13 +28,9 @@ func TestSweepRemovesIdleBuckets(t *testing.T) {
 	idleTTL := 10 * time.Second
 	removed := s.sweep(t0.Add(idleTTL), idleTTL)
 
-	if removed != 2 {
-		t.Errorf("sweep removed %d buckets, want 2", removed)
-	}
+	assert.Equal(t, 2, removed)
 
-	if left := countBuckets(s); left != 0 {
-		t.Errorf("%d buckets left in the store, want 0", left)
-	}
+	assert.Zero(t, countBuckets(s), "buckets left")
 }
 
 func TestSweepBoundary(t *testing.T) {
@@ -45,13 +43,9 @@ func TestSweepBoundary(t *testing.T) {
 	idleTTL := 10 * time.Second
 	removed := s.sweep(t0.Add(idleTTL-time.Nanosecond), idleTTL)
 
-	if removed != 0 {
-		t.Errorf("sweep removed %d buckets, want 0", removed)
-	}
+	assert.Zero(t, removed)
 
-	if left := countBuckets(s); left != 2 {
-		t.Errorf("%d buckets left in the store, want 2", left)
-	}
+	assert.Equal(t, 2, countBuckets(s), "buckets left")
 }
 
 func TestSweepKeepsRecentBuckets(t *testing.T) {
@@ -64,11 +58,7 @@ func TestSweepKeepsRecentBuckets(t *testing.T) {
 	idleTTL := 10 * time.Second
 	removed := s.sweep(t0.Add(idleTTL), idleTTL)
 
-	if removed != 1 {
-		t.Errorf("sweep removed %d buckets, want 1", removed)
-	}
+	assert.Equal(t, 1, removed)
 
-	if left := countBuckets(s); left != 1 {
-		t.Errorf("%d buckets left in the store, want 1", left)
-	}
+	assert.Equal(t, 1, countBuckets(s), "buckets left")
 }

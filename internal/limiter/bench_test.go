@@ -7,13 +7,13 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 func BenchmarkCheck(b *testing.B) {
 	l, err := NewTokenBucket(1e9, 1e9)
-	if err != nil {
-		b.Fatal(err)
-	}
+	require.NoError(b, err)
 
 	req := mustNewRequest(b, "ip:1", 1)
 
@@ -29,9 +29,7 @@ func BenchmarkCheck(b *testing.B) {
 func BenchmarkCheckParallel(b *testing.B) {
 	b.Run("same key", func(b *testing.B) {
 		l, err := NewTokenBucket(1e9, 1e9)
-		if err != nil {
-			b.Fatal(err)
-		}
+		require.NoError(b, err)
 
 		req := mustNewRequest(b, "ip:1", 1)
 		ctx := context.Background()
@@ -49,9 +47,7 @@ func BenchmarkCheckParallel(b *testing.B) {
 
 	b.Run("key per goroutine", func(b *testing.B) {
 		l, err := NewTokenBucket(1e9, 1e9)
-		if err != nil {
-			b.Fatal(err)
-		}
+		require.NoError(b, err)
 
 		var id atomic.Int64
 
@@ -77,15 +73,13 @@ func BenchmarkCheckParallel(b *testing.B) {
 
 func BenchmarkMemoryPerKey(b *testing.B) {
 	const keys = 1_000_000
-	var perKey, perKeySwept float64
+	var perKeySum, perKeySweptSum float64
 
 	for b.Loop() {
 		before := liveHeap()
 
 		l, err := NewTokenBucket(10, 1)
-		if err != nil {
-			b.Fatal(err)
-		}
+		require.NoError(b, err)
 
 		for i := range keys {
 			req := mustNewRequest(b, fmt.Sprintf("ip:%d", i), 1)
@@ -101,11 +95,11 @@ func BenchmarkMemoryPerKey(b *testing.B) {
 		// liveHeap frees the whole limiter and the last reading drops to ~0.
 		runtime.KeepAlive(l)
 
-		perKey += (filled - before) / keys
-		perKeySwept += (swept - before) / keys
+		perKeySum += (filled - before) / keys
+		perKeySweptSum += (swept - before) / keys
 	}
-	b.ReportMetric(perKey/float64(b.N), "B/key")
-	b.ReportMetric(perKeySwept/float64(b.N), "B/key-after-sweep")
+	b.ReportMetric(perKeySum/float64(b.N), "B/key")
+	b.ReportMetric(perKeySweptSum/float64(b.N), "B/key-after-sweep")
 }
 
 // liveHeap runs a garbage collection and returns the bytes held by live heap
