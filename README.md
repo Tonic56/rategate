@@ -2,8 +2,9 @@
 
 [![CI](https://github.com/Tonic56/rategate/actions/workflows/ci.yml/badge.svg)](https://github.com/Tonic56/rategate/actions/workflows/ci.yml)
 
-Rate limiter на Go по алгоритму token bucket, в памяти процесса, без
-зависимостей за пределами стандартной библиотеки.
+Rate limiter на Go по алгоритму token bucket, в памяти процесса. Сам
+лимитер использует только стандартную библиотеку, testify нужен только
+тестам.
 
 Лимитер держит по одному ведру на ключ (IP, идентификатор пользователя, API
 токен), пополняет его с постоянной скоростью и на каждый запрос отвечает
