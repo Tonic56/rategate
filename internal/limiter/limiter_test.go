@@ -2,13 +2,16 @@ package limiter
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"math"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // fakeClock is a clock that stands still until the test moves it with Add.
@@ -37,15 +40,13 @@ func (f *fakeClock) Add(d time.Duration) {
 }
 
 // newTestLimiter returns a limiter whose clock is a fakeClock set to
-// 2024-01-01 00:00:00 UTC. Move time with l.clock.(*fakeClock).Add.
+// 2024-01-01 00:00:00 UTC. Move time with advance.
 // The test fails right away if the limiter cannot be created.
-func newTestLimiter(t testing.TB, limit, rate float64) *TokenBucketLimiter {
-	t.Helper()
+func newTestLimiter(tb testing.TB, limit, rate float64) *TokenBucketLimiter {
+	tb.Helper()
 	fc := newFakeClock(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
 	l, err := NewTokenBucket(limit, rate, withClock(fc))
-	if err != nil {
-		t.Fatalf("newTestLimiter: %v", err)
-	}
+	require.NoError(tb, err)
 	return l
 }
 
@@ -64,9 +65,8 @@ func TestNaNAndInf(t *testing.T) {
 }
 
 func TestInvalidSweepInterval(t *testing.T) {
-	if _, err := NewTokenBucket(1, 1, WithSweepInterval(0)); !errors.Is(err, ErrInvalidSweepInterval) {
-		t.Fatalf("got %v, want %v", err, ErrInvalidSweepInterval)
-	}
+	_, err := NewTokenBucket(1, 1, WithSweepInterval(0))
+	require.ErrorIs(t, err, ErrInvalidSweepInterval)
 }
 
 func TestInvalidRequest(t *testing.T) {
@@ -84,9 +84,8 @@ func TestInvalidRequest(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := NewRequest(tc.key, tc.cost); !errors.Is(err, ErrInvalidRequest) {
-				t.Errorf("got %v, want %v", err, ErrInvalidRequest)
-			}
+			_, err := NewRequest(tc.key, tc.cost)
+			require.ErrorIs(t, err, ErrInvalidRequest)
 		})
 	}
 }
@@ -107,20 +106,17 @@ func TestHappyPath(t *testing.T) {
 			allowed++
 		}
 	}
-	if allowed != 3 {
-		t.Fatalf("expected 3 allowed, got %d", allowed)
-	}
+	require.Equal(t, 3, allowed, "4 requests to a full bucket of 3")
+
 	allowed = 0
-	l.clock.(*fakeClock).Add(time.Second)
+	advance(l, time.Second)
 	for range 2 {
 		res := mustCheck(t, l, req)
 		if res.Allowed {
 			allowed++
 		}
 	}
-	if allowed != 1 {
-		t.Fatalf("expected 1 allowed, got %d", allowed)
-	}
+	assert.Equal(t, 1, allowed, "2 requests after a second of refill")
 }
 
 func TestDifferentKeys(t *testing.T) {
@@ -130,36 +126,28 @@ func TestDifferentKeys(t *testing.T) {
 	reqB := mustNewRequest(t, "ip:b", 1)
 
 	res := mustCheck(t, l, reqA)
-	if !res.Allowed {
-		t.Error("ip:a: expected Allowed=true")
-	}
+	assert.True(t, res.Allowed, "ip:a, first request")
 
 	res = mustCheck(t, l, reqA)
-	if res.Allowed {
-		t.Error("ip:a again: expected Allowed=false")
-	}
+	assert.False(t, res.Allowed, "ip:a, second request")
 
 	res = mustCheck(t, l, reqB)
-	if !res.Allowed {
-		t.Error("ip:b expected Allowed=true")
-	}
+	assert.True(t, res.Allowed, "ip:b, first request")
 }
 
 func TestCostExceedsLimit(t *testing.T) {
 	l := newTestLimiter(t, 10, 1)
 	req := mustNewRequest(t, "ip:1", 11)
 
-	if _, err := l.Check(t.Context(), req); !errors.Is(err, ErrCostExceedsLimit) {
-		t.Fatalf("got %v, want %v", err, ErrCostExceedsLimit)
-	}
+	_, err := l.Check(t.Context(), req)
+	require.ErrorIs(t, err, ErrCostExceedsLimit)
 }
 
 func TestCheckRejectsInvalidRequest(t *testing.T) {
 	l := newTestLimiter(t, 10, 1)
 
-	if _, err := l.Check(t.Context(), Request{Key: "", Cost: 1}); !errors.Is(err, ErrInvalidRequest) {
-		t.Fatalf("got %v, want %v", err, ErrInvalidRequest)
-	}
+	_, err := l.Check(t.Context(), Request{Key: "", Cost: 1})
+	require.ErrorIs(t, err, ErrInvalidRequest)
 }
 
 func TestRefillCapsAtLimit(t *testing.T) {
@@ -169,12 +157,10 @@ func TestRefillCapsAtLimit(t *testing.T) {
 
 	mustCheck(t, l, req)
 
-	l.clock.(*fakeClock).Add(10 * time.Minute)
+	advance(l, 10*time.Minute)
 
 	res := mustCheck(t, l, req)
-	if res.Remaining != 9 {
-		t.Errorf("expected Remaining=9 (refilled to limit 10, minus 1), got %f", res.Remaining)
-	}
+	assert.InDelta(t, 9, res.Remaining, 1e-9, "refilled to limit 10, minus 1")
 }
 
 func TestContextCancelled(t *testing.T) {
@@ -185,9 +171,8 @@ func TestContextCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	if _, err := l.Check(ctx, req); !errors.Is(err, context.Canceled) {
-		t.Errorf("expected error from cancelled context, got %v", err)
-	}
+	_, err := l.Check(ctx, req)
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 func TestRefillCases(t *testing.T) {
@@ -209,10 +194,41 @@ func TestRefillCases(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			tokens := refill(tc.tokens, tc.elapsed, tc.rate, tc.limit)
-			if tokens != tc.want {
-				t.Errorf("refill(%v, %v, %v, %v) = %v, want %v", tc.tokens, tc.elapsed, tc.rate, tc.limit, tokens, tc.want)
-			}
+			assert.InDelta(t, tc.want, refill(tc.tokens, tc.elapsed, tc.rate, tc.limit), 1e-9)
+		})
+	}
+}
+
+// TestDeniedResult checks what a client is told when a request is denied. Each
+// case can expose mistakes the others cannot: with no tokens Cost-tokens equals
+// Cost, with rate 1 dividing equals multiplying, and only a wait that is not a
+// whole number of nanoseconds shows whether it is rounded up.
+func TestDeniedResult(t *testing.T) {
+	cases := []struct {
+		name           string
+		limit          float64
+		rate           float64
+		spend          float64
+		wait           time.Duration
+		cost           float64
+		wantRetryAfter time.Duration
+		wantRemaining  float64
+	}{
+		{"empty bucket", 10, 2, 10, 0, 1, 500 * time.Millisecond, 0},
+		{"partly refilled", 10, 2, 10, 300 * time.Millisecond, 1, 200 * time.Millisecond, 0.6},
+		{"some tokens left", 10, 1, 7, 0, 5, 2 * time.Second, 3},
+		{"wait rounds up", 10, 3, 10, 0, 1, 333333334 * time.Nanosecond, 0},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			l := newTestLimiter(t, tc.limit, tc.rate)
+			mustCheck(t, l, mustNewRequest(t, "ip:1", tc.spend))
+			advance(l, tc.wait)
+			res := mustCheck(t, l, mustNewRequest(t, "ip:1", tc.cost))
+
+			want := Result{Allowed: false, RetryAfter: tc.wantRetryAfter, Remaining: tc.wantRemaining}
+			assert.Equal(t, want, res)
 		})
 	}
 }
@@ -226,13 +242,12 @@ func TestIdleTTL(t *testing.T) {
 	}{
 		{"short refill uses minimum", 10, 1, time.Minute},
 		{"long refill is kept", 1000, 1, 16*time.Minute + 40*time.Second},
+		{"fractional rate", 10, 0.1, 100 * time.Second},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := idleTTL(tc.limit, tc.rate); got != tc.want {
-				t.Errorf("idleTTL(%v, %v) = %v, want %v", tc.limit, tc.rate, got, tc.want)
-			}
+			assert.Equal(t, tc.want, idleTTL(tc.limit, tc.rate))
 		})
 	}
 }
@@ -243,8 +258,7 @@ func TestConcurrentCheck(t *testing.T) {
 	req := mustNewRequest(t, "ip:1", 1)
 
 	var wg sync.WaitGroup
-	var allowed int
-	var mu sync.Mutex
+	var allowed atomic.Int64
 	for range 200 {
 		wg.Go(func() {
 			res, err := l.Check(context.Background(), req)
@@ -253,26 +267,21 @@ func TestConcurrentCheck(t *testing.T) {
 				return
 			}
 			if res.Allowed {
-				mu.Lock()
-				allowed++
-				mu.Unlock()
+				allowed.Add(1)
 			}
 		})
 	}
 
 	wg.Wait()
 
-	if allowed != 100 {
-		t.Errorf("expected exactly 100 allowed, got %d", allowed)
-	}
+	assert.Equal(t, int64(100), allowed.Load())
 }
 
 func TestConcurrentStore(t *testing.T) {
 	l := newTestLimiter(t, 1, 1)
 
 	var wg sync.WaitGroup
-	var allowed int
-	var mu sync.Mutex
+	var allowed atomic.Int64
 
 	for i := range 200 {
 		wg.Go(func() {
@@ -288,20 +297,16 @@ func TestConcurrentStore(t *testing.T) {
 				return
 			}
 			if res.Allowed {
-				mu.Lock()
-				allowed++
-				mu.Unlock()
+				allowed.Add(1)
 			}
 		})
 	}
 	wg.Wait()
 
-	if allowed != 200 {
-		t.Fatalf("expected 200 allowed, got %d", allowed)
-	}
+	assert.Equal(t, int64(200), allowed.Load())
 }
 
-func TestSweepIsInvisibleToClients(t *testing.T) {
+func TestSweepKeepsBucketUntilFull(t *testing.T) {
 	l := newTestLimiter(t, 10, 1)
 
 	req := mustNewRequest(t, "ip:a", 1)
@@ -310,52 +315,66 @@ func TestSweepIsInvisibleToClients(t *testing.T) {
 		mustCheck(t, l, req)
 	}
 
-	l.clock.(*fakeClock).Add(5 * time.Second)
+	advance(l, 5*time.Second)
+	idleTTL := 10 * time.Second
+
+	removed := l.store.sweep(l.clock.Now(), idleTTL)
+	assert.Zero(t, removed)
+
+	res := mustCheck(t, l, req)
+	assert.InDelta(t, 4, res.Remaining, 1e-9, "refilled 5, minus 1")
+}
+
+// TestSweepIsInvisibleToClients removes a bucket at the moment it becomes full
+// and checks that the next request gets the answer the old bucket would give.
+// That answer is the same with or without the removal, so the test also has to
+// check that the bucket is really gone.
+func TestSweepIsInvisibleToClients(t *testing.T) {
+	l := newTestLimiter(t, 10, 1)
+
+	req := mustNewRequest(t, "ip:1", 1)
+
+	for range 10 {
+		mustCheck(t, l, req)
+	}
+
+	advance(l, 10*time.Second)
+
 	idleTTL := 10 * time.Second
 
 	removed := l.store.sweep(l.clock.Now(), idleTTL)
 
-	if removed != 0 {
-		t.Errorf("sweep removed %d buckets, want 0", removed)
-	}
+	assert.Equal(t, 1, removed, "buckets removed")
+	assert.Zero(t, countBuckets(l.store), "buckets left after the sweep")
 
 	res := mustCheck(t, l, req)
-	if res.Remaining != 4 {
-		t.Errorf("expected Remaining=4 (refilled 5, minus 1), got %v", res.Remaining)
-	}
+	assert.Equal(t, Result{Allowed: true, Remaining: 9}, res, "a new bucket of 10, minus 1")
+	assert.Equal(t, 1, countBuckets(l.store), "buckets after Check")
 }
 
 func TestRunRemovesIdleBuckets(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		l, err := NewTokenBucket(10, 1, WithSweepInterval(time.Minute))
-		if err != nil {
-			t.Fatalf("NewTokenBucket: %v", err)
-		}
+		require.NoError(t, err)
 		go l.Run(t.Context())
 		req := mustNewRequest(t, "ip:1", 5)
 
 		mustCheck(t, l, req)
 
-		if n := countBuckets(l.store); n != 1 {
-			t.Fatalf("before the janitor ran: %d buckets, want 1", n)
-		}
+		require.Equal(t, 1, countBuckets(l.store), "buckets before the janitor ran")
 
 		time.Sleep(3 * time.Minute)
 
 		synctest.Wait()
 
-		if n := countBuckets(l.store); n != 0 {
-			t.Errorf("%d buckets left after the janitor ran, want 0", n)
-		}
+		assert.Zero(t, countBuckets(l.store), "buckets after the janitor ran")
 	})
 }
 
 func TestRunStopsWhenContextIsCancelled(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		l, err := NewTokenBucket(10, 1, WithSweepInterval(time.Minute))
-		if err != nil {
-			t.Fatalf("NewTokenBucket: %v", err)
-		}
+		require.NoError(t, err)
 
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
@@ -366,9 +385,7 @@ func TestRunStopsWhenContextIsCancelled(t *testing.T) {
 
 		mustCheck(t, l, req)
 
-		if n := countBuckets(l.store); n != 1 {
-			t.Fatalf("before the janitor ran: %d buckets, want 1", n)
-		}
+		require.Equal(t, 1, countBuckets(l.store), "buckets before the janitor ran")
 
 		cancel()
 
@@ -378,41 +395,40 @@ func TestRunStopsWhenContextIsCancelled(t *testing.T) {
 
 		synctest.Wait()
 
-		if n := countBuckets(l.store); n != 1 {
-			t.Errorf("%d buckets left after Run was stopped, want 1 (nothing may be removed)", n)
-		}
+		assert.Equal(t, 1, countBuckets(l.store), "Run was stopped, so nothing may be removed")
 	})
 }
 
+// advance moves the fakeClock of a limiter from newTestLimiter forward by d.
+func advance(l *TokenBucketLimiter, d time.Duration) {
+	l.clock.(*fakeClock).Add(d)
+}
+
 // expectErr checks that NewTokenBucket(limit, rate) fails with want.
-func expectErr(t testing.TB, limit, rate float64, want error) {
-	t.Helper()
-	if _, err := NewTokenBucket(limit, rate); !errors.Is(err, want) {
-		t.Errorf("NewTokenBucket(%v, %v): got %v, want %v", limit, rate, err, want)
-	}
+func expectErr(tb testing.TB, limit, rate float64, want error) {
+	tb.Helper()
+	_, err := NewTokenBucket(limit, rate)
+	require.ErrorIs(tb, err, want)
 }
 
 // mustNewRequest returns a valid request or fails the test.
-func mustNewRequest(t testing.TB, key string, cost float64) Request {
-	t.Helper()
+func mustNewRequest(tb testing.TB, key string, cost float64) Request {
+	tb.Helper()
 
 	req, err := NewRequest(key, cost)
-	if err != nil {
-		t.Fatalf("NewRequest: %v", err)
-	}
+	require.NoError(tb, err)
 
 	return req
 }
 
 // mustCheck runs l.Check and fails the test on error. Like any helper that
-// calls t.Fatal, it must only be called from the test's own goroutine.
-func mustCheck(t testing.TB, l *TokenBucketLimiter, req Request) Result {
-	t.Helper()
+// stops the test (require calls t.FailNow), it must only be called from the
+// test's own goroutine.
+func mustCheck(tb testing.TB, l *TokenBucketLimiter, req Request) Result {
+	tb.Helper()
 
-	res, err := l.Check(t.Context(), req)
-	if err != nil {
-		t.Fatalf("Check: %v", err)
-	}
+	res, err := l.Check(tb.Context(), req)
+	require.NoError(tb, err)
 
 	return res
 }

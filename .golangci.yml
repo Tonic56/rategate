@@ -9,6 +9,11 @@ linters:
     - ineffassign
     - errorlint
     - misspell
+    - testifylint
+  settings:
+    testifylint:
+      enable-all: true
 formatters:
   enable:
     - gofmt
+    - gofumpt

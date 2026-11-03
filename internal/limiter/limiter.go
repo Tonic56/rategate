@@ -1,3 +1,5 @@
+// Package limiter implements an in-memory rate limiter based on the token
+// bucket algorithm, with one bucket per key.
 package limiter
 
 import (
@@ -14,15 +16,9 @@ const (
 	// minIdleTTL is the lower bound for idleTTL. With a fast rate a bucket
 	// refills in milliseconds, and removing it that early would only make
 	// the limiter delete and recreate buckets for nothing. Keeping a bucket
-	// longer than needed is always safe, it only costs memory.
+	// longer than needed is always safe; it only costs memory.
 	minIdleTTL = time.Minute
 )
-
-// Limiter is the contract for rate limiting implementations.
-// A Limiter must be safe for concurrent use by multiple goroutines.
-type Limiter interface {
-	Check(ctx context.Context, req Request) (Result, error)
-}
 
 // clock abstracts the source of time so that tests can control the passage
 // of time instead of relying on the real wall clock.
@@ -39,6 +35,7 @@ func (realClock) Now() time.Time {
 
 // TokenBucketLimiter is an in-memory rate limiter based on the token bucket
 // algorithm. Each key gets its own bucket that is refilled at a fixed rate.
+// It is safe for concurrent use by multiple goroutines.
 //
 // Buckets of keys that stop sending requests are only freed while Run is
 // running; without it the limiter still works, but memory keeps growing.
@@ -136,6 +133,9 @@ func NewRequest(key string, cost float64) (Request, error) {
 // reports whether the request is allowed, how many tokens remain, and when
 // the client may retry a denied request. The bucket is created lazily the
 // first time a key is seen.
+//
+// ctx is checked once, before waiting for the shard lock, so cancelling it
+// during that wait does not interrupt the call.
 func (l *TokenBucketLimiter) Check(ctx context.Context, req Request) (Result, error) {
 	if err := req.validate(); err != nil {
 		return Result{}, err
@@ -229,6 +229,8 @@ func idleTTL(limit, rate float64) time.Duration {
 // Run removes idle buckets every sweep interval until ctx is cancelled.
 // It blocks, so the caller decides where it runs and for how long, usually
 // with go l.Run(ctx) and a ctx that is cancelled on shutdown.
+//
+// Start it once. A second call breaks nothing, but it sweeps twice as often.
 func (l *TokenBucketLimiter) Run(ctx context.Context) {
 	ticker := time.NewTicker(l.sweepInterval)
 	defer ticker.Stop()
